@@ -1,0 +1,128 @@
+'use strict';
+
+/**
+ * An asynchronous bootstrap function that runs before
+ * your application gets started.
+ *
+ * This gives you an opportunity to set up your data model,
+ * run jobs, or perform some special logic.
+ *
+ * See more details here: https://strapi.io/documentation/developer-docs/latest/setup-deployment-guides/configurations.html#bootstrap
+ */
+
+module.exports = () => {
+    const io = require("socket.io")(3000, {
+        cors: {
+            origin: "*",
+        }
+    });
+
+    const crypto = require("crypto");
+    const randomId = () => crypto.randomBytes(8).toString("hex");
+
+    io.use(async(socket, next) => {
+        console.log(socket.handshake.auth)
+            //   const sessionID = socket.handshake.auth.sessionID;
+            //   if (sessionID) {
+            //     const session = await sessionStore.findSession(sessionID);
+            //     if (session) {
+            //       socket.sessionID = sessionID;
+            //       socket.userID = session.userID;
+            //       socket.username = session.username;
+            //       return next();
+            //     }
+            //   }
+        const username = socket.handshake.auth.username;
+        if (!username) {
+            return next(new Error("invalid username"));
+        }
+        socket.sessionID = randomId();
+        socket.userID = randomId();
+        socket.username = username;
+        next();
+    });
+
+    io.on("connection", async(socket) => {
+        console.log("CONNECTED")
+            // persist session
+            //   sessionStore.saveSession(socket.sessionID, {
+            //     userID: socket.userID,
+            //     username: socket.username,
+            //     connected: true,
+            //   });
+
+        // emit session details
+        socket.emit("session", {
+            sessionID: socket.sessionID,
+            userID: socket.userID,
+        });
+
+        // join the "userID" room
+        socket.join(socket.userID);
+
+        // fetch existing users
+        //   const users = [];
+        //   const [messages, sessions] = await Promise.all([
+        //     messageStore.findMessagesForUser(socket.userID),
+        //     sessionStore.findAllSessions(),
+        //   ]);
+        //   const messagesPerUser = new Map();
+        //   messages.forEach((message) => {
+        //     const { from, to } = message;
+        //     const otherUser = socket.userID === from ? to : from;
+        //     if (messagesPerUser.has(otherUser)) {
+        //       messagesPerUser.get(otherUser).push(message);
+        //     } else {
+        //       messagesPerUser.set(otherUser, [message]);
+        //     }
+        //   });
+
+        //   sessions.forEach((session) => {
+        //     users.push({
+        //       userID: session.userID,
+        //       username: session.username,
+        //       connected: session.connected,
+        //       messages: messagesPerUser.get(session.userID) || [],
+        //     });
+        //   });
+        //   socket.emit("users", users);
+
+        // notify existing users
+        socket.broadcast.emit("user connected", {
+            userID: socket.userID,
+            username: socket.username,
+            connected: true,
+            messages: [],
+        });
+
+        // forward the private message to the right recipient (and to other tabs of the sender)
+        socket.on("private message", ({ content, to }) => {
+            const message = {
+                content,
+                from: socket.userID,
+                to,
+            };
+            socket.to(to).to(socket.userID).emit("private message", message);
+            //messageStore.saveMessage(message);
+        });
+
+        // notify users upon disconnection
+        socket.on("disconnect", async() => {
+            const matchingSockets = await io.in(socket.userID).allSockets();
+            const isDisconnected = matchingSockets.size === 0;
+            if (isDisconnected) {
+                // notify other users
+                socket.broadcast.emit("user disconnected", socket.userID);
+                // update the connection status of the session
+                //   sessionStore.saveSession(socket.sessionID, {
+                //     userID: socket.userID,
+                //     username: socket.username,
+                //     connected: false,
+                //   });
+            }
+        });
+    });
+
+
+
+};
